@@ -1,6 +1,10 @@
+use pwmd::Opt;
+use structopt::StructOpt;
+
 fn main() -> anyhow::Result<()> {
     set_up_tracing();
-    pwmd::register_on_dbus()
+    let opts = Opt::from_args();
+    pwmd::register_on_dbus(opts)
 }
 
 fn set_up_tracing() {

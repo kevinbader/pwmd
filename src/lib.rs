@@ -1,129 +1,202 @@
-mod pwm;
+// mod pwm;
+mod pwm2;
 
-use std::sync::{Arc, Mutex};
+use std::{convert::TryInto, path::PathBuf};
 
-use dbus::blocking::Connection;
-use dbus_crossroads::{Crossroads, IfaceBuilder, IfaceToken};
-use pwm::{Controller, Pwm};
-use tracing::{debug, info};
-
-use crate::pwm::PwmDummy;
+use enumflags2::BitFlags;
+use pwm2::Pwm;
+use tracing::{debug, error, info, instrument};
+use zbus::dbus_interface;
 
 const DBUS_SERVICE_NAME: &'static str = "com.kevinbader.pwmd";
-const DBUS_GREETER_INTERFACE_NAME: &'static str = "com.kevinbader.pwmd.Greeter";
-const DBUS_PWM_INTERFACE_NAME: &'static str = "com.kevinbader.pwmd.pwm";
 
-type AppState<T> = Arc<Mutex<InnerAppState<T>>>;
-struct InnerAppState<T: Pwm> {
-    called_count: u32,
-    pwm: T,
+use crate::pwm2::Controller;
+
+use structopt::StructOpt;
+
+#[derive(Debug, StructOpt)]
+#[structopt(name = "pwmd", about = "Exposes PWM chips to DBUS.")]
+pub struct Opt {
+    /// For testing: path to the sysfs pwm class directory.
+    #[structopt(long, parse(from_os_str), env)]
+    sysfs_root: Option<PathBuf>,
 }
 
-pub fn register_on_dbus() -> anyhow::Result<()> {
+// use zbus_macros::DBusError;
+// #[derive(DBusError, Debug)]
+// #[dbus_error(prefix = "com.kevinbader.pwmd")]
+// enum MyError {
+//     ZBus(zbus::Error),
+//     PwmError(String),
+// }
+
+/// Low-level interface to the PWM controllers as exposed by Linux through sysfs.
+// #[derive(Debug)]
+// struct PwmApi<T>
+// where
+//     T: Pwm,
+// {
+//     pwm: T,
+// }
+
+// impl<T> PwmApi<T>
+// where
+//     T: Pwm,
+// {
+//     fn new(pwm: T) -> Self {
+//         Self { pwm }
+//     }
+// }
+
+// #[dbus_interface(name = "com.kevinbader.pwmd.pwm")]
+// impl<T> PwmApi<T>
+// where
+//     T: Pwm + core::fmt::Debug + 'static,
+// {
+//     fn controllers(&mut self) -> Vec<ControllerId> {
+//         self.pwm.controllers()
+//     }
+
+//     fn channels(&mut self, controller: ControllerId) -> Result<Vec<ChannelId>, Error> {
+//         self.pwm
+//             .channels(controller)
+//             .map_err(|e| Error::MyError(e.into()))
+//     }
+
+//     fn export(&mut self, controller: ControllerId) -> Result<(), Error> {
+//         self.pwm
+//             .export(controller)
+//             .map_err(|e| Error::MyError(e.into()))
+//     }
+
+//     fn unexport(&mut self, controller: ControllerId) -> Result<(), Error> {
+//         self.pwm
+//             .unexport(controller)
+//             .map_err(|e| Error::MyError(e.into()))
+//     }
+
+//     fn set_period(
+//         &mut self,
+//         controller: ControllerId,
+//         channel: ChannelId,
+//         period: u64,
+//     ) -> Result<(), Error> {
+//         self.pwm
+//             .set_period(controller, channel, period)
+//             .map_err(|e| Error::MyError(e.into()))
+//     }
+
+//     fn set_duty_cycle(
+//         &mut self,
+//         controller: ControllerId,
+//         channel: ChannelId,
+//         duty_cycle: u64,
+//     ) -> Result<(), Error> {
+//         self.pwm
+//             .set_duty_cycle(controller, channel, duty_cycle)
+//             .map_err(|e| Error::MyError(e.into()))
+//     }
+
+//     fn enable(&mut self, controller: ControllerId, channel: ChannelId) -> Result<(), Error> {
+//         self.pwm
+//             .enable(controller, channel)
+//             .map_err(|e| Error::MyError(e.into()))
+//     }
+
+//     fn disable(&mut self, controller: ControllerId, channel: ChannelId) -> Result<(), Error> {
+//         self.pwm
+//             .disable(controller, channel)
+//             .map_err(|e| Error::MyError(e.into()))
+//     }
+// }
+
+// /// Abstraction for controlling LEDs using a PWM controller.
+// struct LedApi<T>
+// where
+//     T: Pwm,
+// {
+//     pwm: T,
+// }
+
+// impl<T> LedApi<T>
+// where
+//     T: Pwm,
+// {
+//     fn new(pwm: T) -> Self {
+//         Self { pwm }
+//     }
+// }
+
+// #[dbus_interface(name = "com.kevinbader.pwmd.led")]
+// impl<T> LedApi<T>
+// where
+//     T: Pwm + 'static,
+// {
+//     fn bar(&mut self) -> zbus::fdo::Result<String> {
+//         Ok(format!("this is baaaaaaaaaaaaarta!"))
+//         // Err(zbus::fdo::Error::Failed("oh noes haha".to_string()))
+//     }
+// }
+
+#[derive(Debug)]
+struct PwmApi {
+    pwm: Pwm,
+}
+
+#[dbus_interface(name = "com.kevinbader.pwmd.pwm")]
+impl PwmApi {
+    #[instrument]
+    pub fn export(&mut self, controller: u32) -> zbus::Result<String> {
+        let controller = Controller(controller);
+        let res = match self.pwm.export(controller) {
+            Ok(()) => "OK".to_string(),
+            Err(e) => e.to_string(),
+        };
+        debug!("{:?}", res);
+        Ok(res)
+    }
+
+    #[instrument]
+    pub fn unexport(&mut self, controller: u32) -> zbus::Result<String> {
+        let controller = Controller(controller);
+        let res = match self.pwm.unexport(controller) {
+            Ok(()) => "OK".to_string(),
+            Err(e) => e.to_string(),
+        };
+        debug!("{:?}", res);
+        Ok(res)
+    }
+}
+
+pub fn register_on_dbus(opts: Opt) -> anyhow::Result<()> {
+    let pwm = match opts.sysfs_root {
+        Some(sysfs_root) => Pwm::with_sysfs_root(sysfs_root),
+        None => Pwm::new(),
+    };
+    debug!("{:?}", pwm);
+    let pwm_api = PwmApi { pwm };
+    // let pwm_api = PwmApi::new(PwmDummy::new());
+    // let led_api = LedApi::new(PwmDummy::new());
+
     // Connect to DBUS and register service:
-    let dbus_client = Connection::new_session()?;
-    dbus_client.request_name(DBUS_SERVICE_NAME, false, false, true)?;
-    info!("Now known to DBUS as {}", DBUS_SERVICE_NAME);
+    let connection = zbus::Connection::new_session()?;
+    zbus::fdo::DBusProxy::new(&connection)?.request_name(DBUS_SERVICE_NAME, BitFlags::empty())?;
 
-    // Crossroads as a framework takes care of setting up introspection etc.;
-    // it makes writing the handler function below easier.
-    let mut cr = Crossroads::new();
-
-    // We define a global application state and expose it through multiple interface on DBUS.
-    let pwm = PwmDummy::new();
-    let state = Arc::new(Mutex::new(InnerAppState {
-        called_count: 0,
-        pwm,
-    }));
-    let greeter_iface = add_greeter_dbus_interface(&mut cr);
-    let pwm_iface = add_pwm_dbus_interface(&mut cr);
-    // Offer both interfaces on the same path:
-    cr.insert("/", &[greeter_iface, pwm_iface], state);
-    info!("Exposed DBUS interfaces at path \"/\"");
+    let mut object_server = zbus::ObjectServer::new(&connection);
+    object_server.at(&"/".try_into()?, pwm_api)?;
+    // object_server.at(&"/led".try_into()?, led_api)?;
 
     // Serve clients forever.
-    info!("Ready to accept DBUS method calls.");
-    cr.serve(&dbus_client)?;
-    unreachable!()
-
-    // // Make a "proxy object" that contains the destination and path of our method call.
-    // let proxy = Proxy::new("org.freedesktop.DBus", "/", Duration::from_secs(5), conn);
-
-    // // Call the method and await a response. See the argument guide for details about
-    // // how to send and receive arguments to the method.
-    // let (names,): (Vec<String>,) = proxy
-    //     .method_call("org.freedesktop.DBus", "ListNames", ())
-    //     .await?;
-
-    // // Print all the names.
-    // for name in names {
-    //     println!("{}", name);
-    // }
-
-    // std::thread::sleep(Duration::from_secs(5));
-
-    // Ok(())
-}
-
-fn add_greeter_dbus_interface<T: Pwm + 'static>(
-    cr: &mut Crossroads,
-) -> IfaceToken<Arc<Mutex<InnerAppState<T>>>> {
-    cr.register(
-        DBUS_GREETER_INTERFACE_NAME,
-        |builder: &mut IfaceBuilder<AppState<T>>| {
-            builder.method(
-                "Hello",
-                ("name",),
-                ("reply",),
-                |_ctx, state: &mut AppState<T>, (name,): (String,)| {
-                    debug!("Incoming hello call from {}!", name);
-                    let mut state = state.lock().unwrap();
-                    state.called_count += 1;
-                    let reply = format!(
-                        "Hello {}! This API has been used {} times.",
-                        name, state.called_count
-                    );
-                    Ok((reply,))
-                },
-            );
-        },
-    )
-
-    // cr.insert(DBUS_GREETER_PATH, &[dbus_interface], state);
-    // info!(
-    //     path = DBUS_GREETER_PATH,
-    //     interface = DBUS_GREETER_INTERFACE_NAME,
-    //     "Exposed"
-    // );
-}
-
-fn add_pwm_dbus_interface<T: Pwm + 'static>(
-    cr: &mut Crossroads,
-) -> IfaceToken<Arc<Mutex<InnerAppState<T>>>> {
-    cr.register(
-        DBUS_PWM_INTERFACE_NAME,
-        |builder: &mut IfaceBuilder<AppState<T>>| {
-            builder.method(
-                "query",
-                (),
-                ("reply",),
-                |_ctx, state: &mut AppState<T>, _args: ()| {
-                    let state = state.lock().unwrap();
-                    let reply = format!("PWM QUERY: {:?}", state.pwm.query());
-                    Ok((reply,))
-                },
-            );
-            builder.method(
-                "export",
-                ("controller",),
-                ("channels",),
-                |_ctx, state: &mut AppState<T>, (controller,): (&Controller,)| {
-                    let state = state.lock().unwrap();
-                    debug!("would export {:?}", controller);
-                    let channels = state.pwm.export(controller);
-                    Ok((channels,))
-                },
-            );
-        },
-    )
+    info!(
+        service = DBUS_SERVICE_NAME,
+        path = "/",
+        "Listening on DBUS."
+    );
+    loop {
+        match object_server.try_handle_next() {
+            Ok(Some(msg)) => debug!("received {:?}", msg),
+            Ok(None) => {}
+            Err(error) => error!("{}", error),
+        }
+    }
 }

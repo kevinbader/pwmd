@@ -7,9 +7,14 @@ edition = "2018"
 
 [dependencies]
 anyhow = "1.0.42"
-dbus = "0.9.3"
-dbus-crossroads = "0.4.0"
-dbus-tokio = "0.7.3"
-tokio = { version = "1.9.0", features = ["full"] }
 tracing = "0.1.26"
 tracing-subscriber = "0.2.19"
+zbus = "1.9.1"
+enumflags2 = "0.6.4"
+serde = { version = "1.0.126", features = ["derive"] }
+zvariant_derive = "2.7.0"
+zvariant = "2.7.0"
+zbus_macros = "1.9.1"
+thiserror = "1.0.26"
+temp-dir = "0.1.11"
+structopt = "0.3.23"
