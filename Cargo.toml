@@ -5,7 +5,7 @@ edition = "2018"
 authors = [
     "Kevin Bader"
 ]
-license = "MIT OR Apache-2.0"
+license = "MIT"
 description = "Exposes PWM chips to DBUS."
 repository = "https://github.com/kevinbader/pwmd"
 

@@ -1,6 +1,6 @@
 # pwmd
 
-tl;dr: pwmd exposes the Linux' sysfs PWM interface to DBUS.
+pwmd exposes the Linux' sysfs PWM interface to DBUS.
 
 ## Why
 
