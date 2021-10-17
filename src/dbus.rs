@@ -11,6 +11,7 @@ use crate::{
     Args,
 };
 
+/// Expose DBUS interface and block on handling connections.
 pub fn listen(args: Args, on_ready: impl FnOnce() -> ()) -> anyhow::Result<()> {
     let pwm = match args.sysfs_root {
         Some(sysfs_root) => Pwm::with_sysfs_root(sysfs_root),
@@ -57,8 +58,10 @@ struct PwmApi {
     quit: Rc<RefCell<bool>>,
 }
 
-pub type StatusCode = u16;
+/// All methods return a code-error-pair. An empty string means no error.
 pub type StatusErrorPair = (StatusCode, String);
+/// HTTP inspired status code that indicate success, client error and server error.
+pub type StatusCode = u16;
 
 #[dbus_interface(name = "com.kevinbader.pwmd.pwm1")]
 impl PwmApi {

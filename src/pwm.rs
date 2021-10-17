@@ -6,6 +6,7 @@ use std::{
 use thiserror::Error;
 use tracing::{debug, instrument};
 
+/// Everything that can go wrong.
 #[derive(Error, Debug)]
 pub enum PwmError {
     #[error("{0:?} not found")]
@@ -18,28 +19,42 @@ pub enum PwmError {
     Sysfs(Access, #[source] std::io::Error),
 }
 
+/// Used in PwmError to format sysfs related errors.
 #[derive(Debug)]
 pub enum Access {
     Read(PathBuf),
     Write(PathBuf),
 }
 
+/// Exposes PWM functionality.
+///
+/// Since the Linux kernel exposes PWM controllers and their settings through
+/// sysfs, PWM operations are just file reads and writes. To allow testing with
+/// a real file system but outside of sysfs, the `sysfs_root` property may be
+/// used to "offset" those operations to an alternative directory.
+///
+/// Documentation on Linux PWM sysfs:
+/// <https://www.kernel.org/doc/html/latest/driver-api/pwm.html>
 #[derive(Debug)]
 pub struct Pwm {
     sysfs_root: PathBuf,
 }
 
+/// A PWM controller (a.k.a. PWM chip) is identified by a non-negative number.
 #[derive(Debug, Clone)]
 pub struct Controller(pub u32);
 
+/// PWM controllers expose channels, which are also identified by non-negative numbers.
 #[derive(Debug, Clone)]
 pub struct Channel(pub u32);
 
 impl Pwm {
+    /// Initialize PWM.
     pub fn new() -> Self {
         Self::with_sysfs_root(PathBuf::from("/sys/class/pwm"))
     }
 
+    /// Initialize PWM with an alternative sysfs directory, for testing.
     pub fn with_sysfs_root(sysfs_root: PathBuf) -> Self {
         if !sysfs_root.exists() {
             panic!("sysfs root does not exist: {:?}", sysfs_root);
@@ -47,6 +62,7 @@ impl Pwm {
         Self { sysfs_root }
     }
 
+    /// Export a PWM controller, which enables access to its channels.
     #[instrument]
     pub fn export(&mut self, controller: Controller) -> Result<(), PwmError> {
         // Exporting an already exported controller is a no-op, so we don't need
@@ -62,6 +78,7 @@ impl Pwm {
         fs::write(&path, "1").map_err(|e| PwmError::Sysfs(Access::Write(path), e))
     }
 
+    /// Unexport a PWM controller, which disables access to its channels.
     #[instrument]
     pub fn unexport(&mut self, controller: Controller) -> Result<(), PwmError> {
         // Un-exporting an already un-exported controller is a no-op, so we
@@ -76,11 +93,13 @@ impl Pwm {
         fs::write(&path, "1").map_err(|e| PwmError::Sysfs(Access::Write(path), e))
     }
 
+    /// Enable a channel.
     #[instrument]
     pub fn enable(&mut self, controller: Controller, channel: Channel) -> Result<(), PwmError> {
         self.update_enable_file(controller, channel, "1")
     }
 
+    /// Disable a channel.
     #[instrument]
     pub fn disable(&mut self, controller: Controller, channel: Channel) -> Result<(), PwmError> {
         self.update_enable_file(controller, channel, "0")

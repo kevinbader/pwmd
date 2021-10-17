@@ -1,12 +1,18 @@
+//! pwmd exposes the Linux' sysfs PWM interface to DBUS.
+
+/// Global options
 pub mod args;
+/// DBUS interface
 pub mod dbus;
+/// Wraps/exposes the Linux Kernel's PWM functionality.
 mod pwm;
 
 pub use args::Args;
 use color_eyre::Report;
 use tracing_subscriber::EnvFilter;
 
-pub fn setup() -> Result<(), Report> {
+/// Basic tracing/env setup for pwmd.
+pub fn setup_logging() -> Result<(), Report> {
     if std::env::var("RUST_BACKTRACE").is_err() {
         std::env::set_var("RUST_BACKTRACE", "full")
     }

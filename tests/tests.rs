@@ -11,7 +11,7 @@ use temp_dir::TempDir;
 #[test]
 fn happy_flow() -> anyhow::Result<()> {
     // std::env::set_var("RUST_BACKTRACE", "full");
-    pwmd::setup().unwrap();
+    pwmd::setup_logging().unwrap();
 
     // fake /sys/class/pwm directory:
     let tmpdir = TempDir::new().unwrap();
