@@ -10,7 +10,7 @@ use crate::{
 };
 
 /// Expose DBUS interface and block on handling connections.
-pub fn listen(args: Args, on_ready: impl FnOnce() -> ()) -> anyhow::Result<()> {
+pub fn listen(args: Args, on_ready: impl FnOnce()) -> anyhow::Result<()> {
     debug!(?args);
     let pwm = match args.sysfs_root {
         Some(sysfs_root) => Pwm::with_sysfs_root(sysfs_root),

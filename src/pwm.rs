@@ -82,7 +82,7 @@ impl Pwm {
             .sysfs_root
             .join(format!("pwmchip{}/export", controller.0));
         if !path.exists() {
-            return Err(PwmError::ControllerNotFound(controller.clone()));
+            return Err(PwmError::ControllerNotFound(controller));
         }
 
         debug!("writing to {:?}", &path);
@@ -98,7 +98,7 @@ impl Pwm {
             .sysfs_root
             .join(format!("pwmchip{}/unexport", controller.0));
         if !path.exists() {
-            return Err(PwmError::ControllerNotFound(controller.clone()));
+            return Err(PwmError::ControllerNotFound(controller));
         }
 
         fs::write(&path, "1").map_err(|e| PwmError::Sysfs(Access::Write(path), e))
@@ -173,7 +173,7 @@ impl Pwm {
         let duty_cycle = fs::read_to_string(&duty_cycle_file)
             .map_err(|e| PwmError::Sysfs(Access::Read(duty_cycle_file), e))?
             .parse::<u64>()
-            .map(|ns| Duration::from_nanos(ns))
+            .map(Duration::from_nanos)
             .expect("duty cycle file expected to contain a number");
 
         if duty_cycle >= period {
@@ -213,7 +213,7 @@ impl Pwm {
         let period = fs::read_to_string(&period_file)
             .map_err(|e| PwmError::Sysfs(Access::Read(period_file), e))?
             .parse::<u64>()
-            .map(|ns| Duration::from_nanos(ns))
+            .map(Duration::from_nanos)
             .expect("period file expected to contain a number");
 
         if duty_cycle >= period {
@@ -276,7 +276,7 @@ fn read_npwm_file(chip_dir: &Path) -> Result<u32, PwmError> {
                 .expect("npwm expected to contain the number of channels");
             Ok(num)
         }
-        Err(e) => return Err(PwmError::Sysfs(Access::Read(npwm_file), e)),
+        Err(e) => Err(PwmError::Sysfs(Access::Read(npwm_file), e)),
     }
 }
 

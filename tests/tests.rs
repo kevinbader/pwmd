@@ -6,7 +6,7 @@ use std::{
 };
 
 use pwmd::{dbus::StatusErrorPair, Args};
-use rand::{distributions::Alphanumeric, thread_rng, Rng};
+use rand::Rng;
 use temp_dir::TempDir;
 
 #[test]
