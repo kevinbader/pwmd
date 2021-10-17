@@ -9,8 +9,6 @@ description = "Exposes PWM chips to DBUS."
 categories = ["api-bindings", "filesystem", "os::linux-apis"]
 keywords = ["pwm", "dbus", "led"]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
 anyhow = "1.0.42"
 tracing = "0.1.26"
