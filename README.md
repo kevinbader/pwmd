@@ -11,12 +11,13 @@ With pwmd you can use DBUS to control LEDs without root privileges. Under the ho
 ## Getting started
 
 ```bash
-$ cargo install https://github.com/kevinbader/pwmd
+$ cargo install --git https://github.com/kevinbader/pwmd
 $ sudo pwmd
 ```
 
 ## TODOs
 
-- [ ] systemd file
 - [ ] CONTRIBUTORS file
-- [ ] High-level API specifically for LEDs
+- [ ] systemd file
+- [ ] describe how to control logging output
+- [ ] high-level API specifically for LEDs

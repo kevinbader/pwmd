@@ -1,7 +1,5 @@
 #![doc = include_str!("../README.md")]
 
-// // pwmd exposes the Linux' sysfs PWM interface to DBUS.
-
 /// Global options
 pub mod args;
 /// DBUS interface
