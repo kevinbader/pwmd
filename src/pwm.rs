@@ -1,194 +1,172 @@
-use serde::{Deserialize, Serialize};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
+use thiserror::Error;
 use tracing::{debug, instrument};
-use zvariant::{derive::Type, Type};
 
-pub type ControllerId = u32;
-pub type ChannelId = u32;
-
-pub trait Pwm {
-    // fn query(&self) -> Vec<Controller>;
-    // fn export(&mut self, controller: &Controller) -> Vec<Channel>;
-    // fn unexport(&mut self, controller: &Controller);
-    // fn set_period(&mut self, channel: &Channel, period: u64);
-    // fn set_duty_cycle(&mut self, channel: &Channel, duty_cycle: u64);
-    // fn enable(&mut self, channel: &Channel);
-    // fn disable(&mut self, channel: &Channel);
-
-    fn controllers(&mut self) -> Vec<ControllerId>;
-    fn channels(&mut self, controller: ControllerId) -> Result<Vec<ChannelId>, &'static str>;
-
-    fn export(&mut self, controller: ControllerId) -> Result<(), &'static str>;
-    fn unexport(&mut self, controller: ControllerId) -> Result<(), &'static str>;
-
-    fn set_period(
-        &mut self,
-        controller: ControllerId,
-        channel: ChannelId,
-        period: u64,
-    ) -> Result<(), &'static str>;
-    fn set_duty_cycle(
-        &mut self,
-        controller: ControllerId,
-        channel: ChannelId,
-        duty_cycle: u64,
-    ) -> Result<(), &'static str>;
-
-    fn enable(&mut self, controller: ControllerId, channel: ChannelId) -> Result<(), &'static str>;
-    fn disable(&mut self, controller: ControllerId, channel: ChannelId)
-        -> Result<(), &'static str>;
+#[derive(Error, Debug)]
+pub enum PwmError {
+    #[error("{0:?} not found")]
+    ControllerNotFound(Controller),
+    #[error("{0:?}/{1:?} not found")]
+    ChannelNotFound(Controller, Channel),
+    #[error("{0:?} not exported")]
+    NotExported(Controller),
+    #[error("failed to {0:?}: {1}")]
+    Sysfs(Access, #[source] std::io::Error),
 }
 
-// #[derive(Debug, Serialize, Deserialize, Type)]
-// pub struct Controller {
-//     /// Id of the controller (a.k.a. base).
-//     pub id: u32,
-//     /// Number of channels this controller supports (a.k.a. npwm).
-//     pub n_channels: u32,
-// }
-
-// #[derive(Debug, Serialize, Deserialize, Type)]
-// pub struct Channel {
-//     // ID of the controller this channel belongs to.
-//     controller_id: u32,
-//     /// The total period of the PWM signal (read/write) in nanoseconds.
-//     /// Value is the sum of the active and inactive time of the PWM.
-//     period: u64,
-//     /// The active time of the PWM signal (read/write) in nanoseconds.
-//     /// Must be less than the period.
-//     duty_cycle: u64,
-// }
-
-// impl Channel {
-//     fn new(controller_id: u32) -> Self {
-//         let frequency_hz = 1000;
-//         let period = 10_u64.pow(9) / frequency_hz;
-//         let duty_cycle = period / 2;
-//         Self {
-//             controller_id,
-//             period,
-//             duty_cycle,
-//         }
-//     }
-// }
-
-#[derive(Debug, Default)]
-pub struct PwmDummy {
-    exported: bool,
-    enabled: bool,
-    period: u64,
-    duty_cycle: u64,
+#[derive(Debug)]
+pub enum Access {
+    Read(PathBuf),
+    Write(PathBuf),
 }
-impl PwmDummy {
+
+#[derive(Debug)]
+pub struct Pwm {
+    sysfs_root: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct Controller(pub u32);
+
+#[derive(Debug, Clone)]
+pub struct Channel(pub u32);
+
+impl Pwm {
     pub fn new() -> Self {
-        Self::default()
+        Self::with_sysfs_root(PathBuf::from("/sys/class/pwm"))
+    }
+
+    pub fn with_sysfs_root(sysfs_root: PathBuf) -> Self {
+        if !sysfs_root.exists() {
+            panic!("sysfs root does not exist: {:?}", sysfs_root);
+        }
+        Self { sysfs_root }
+    }
+
+    #[instrument]
+    pub fn export(&mut self, controller: Controller) -> Result<(), PwmError> {
+        // Exporting an already exported controller is a no-op, so we don't need
+        // to check whether the controller is already exported.
+        let path = self
+            .sysfs_root
+            .join(format!("pwmchip{}/export", controller.0));
+        if !path.exists() {
+            return Err(PwmError::ControllerNotFound(controller.clone()));
+        }
+
+        debug!("writing to {:?}", &path);
+        fs::write(&path, "1").map_err(|e| PwmError::Sysfs(Access::Write(path), e))
+    }
+
+    #[instrument]
+    pub fn unexport(&mut self, controller: Controller) -> Result<(), PwmError> {
+        // Un-exporting an already un-exported controller is a no-op, so we
+        // don't need to check whether the controller is actually exported.
+        let path = self
+            .sysfs_root
+            .join(format!("pwmchip{}/unexport", controller.0));
+        if !path.exists() {
+            return Err(PwmError::ControllerNotFound(controller.clone()));
+        }
+
+        fs::write(&path, "1").map_err(|e| PwmError::Sysfs(Access::Write(path), e))
+    }
+
+    #[instrument]
+    pub fn enable(&mut self, controller: Controller, channel: Channel) -> Result<(), PwmError> {
+        self.update_enable_file(controller, channel, "1")
+    }
+
+    #[instrument]
+    pub fn disable(&mut self, controller: Controller, channel: Channel) -> Result<(), PwmError> {
+        self.update_enable_file(controller, channel, "0")
+    }
+
+    fn update_enable_file(
+        &mut self,
+        controller: Controller,
+        channel: Channel,
+        value: &str,
+    ) -> Result<(), PwmError> {
+        // Enabling/disabling an already enabled/disabled channel is a no-op, so
+        // we don't need to check whether the channel is already
+        // enabled/disabled.
+
+        let chip_dir = self.sysfs_root.join(format!("pwmchip{}", controller.0));
+        if !chip_dir.exists() {
+            return Err(PwmError::ControllerNotFound(controller));
+        }
+
+        let n_pwm = read_npwm_file(&chip_dir)?;
+        if channel.0 >= n_pwm {
+            return Err(PwmError::ChannelNotFound(controller, channel));
+        }
+
+        let enable_file = chip_dir.join(format!("pwm{}/enable", channel.0));
+        if !enable_file.exists() {
+            return Err(PwmError::NotExported(controller));
+        }
+
+        debug!("writing to {:?}", &enable_file);
+        fs::write(&enable_file, value).map_err(|e| PwmError::Sysfs(Access::Write(enable_file), e))
     }
 }
-impl Pwm for PwmDummy {
-    #[instrument]
-    fn controllers(&mut self) -> Vec<ControllerId> {
-        debug!("controllers");
-        vec![0]
+
+fn read_npwm_file(chip_dir: &Path) -> Result<u32, PwmError> {
+    let npwm_file = chip_dir.join("npwm");
+    match fs::read_to_string(&npwm_file) {
+        Ok(s) => {
+            let num = s
+                .parse::<u32>()
+                .expect("npwm expected to contain the number of channels");
+            Ok(num)
+        }
+        Err(e) => return Err(PwmError::Sysfs(Access::Read(npwm_file), e)),
+    }
+}
+
+#[cfg(test)]
+mod should {
+    use super::*;
+    use temp_dir::TempDir;
+
+    #[test]
+    fn fail_if_controller_not_found() {
+        let tmp = TempDir::new().unwrap();
+        let mut pwm = Pwm::with_sysfs_root(tmp.path().to_owned());
+
+        assert!(matches!(
+            pwm.export(Controller(4)),
+            Err(PwmError::ControllerNotFound(Controller(4)))
+        ));
+        assert!(matches!(
+            pwm.unexport(Controller(4)),
+            Err(PwmError::ControllerNotFound(Controller(4)))
+        ));
     }
 
-    #[instrument]
-    fn channels(&mut self, controller: ControllerId) -> Result<Vec<ChannelId>, &'static str> {
-        debug!("channels");
-        match controller {
-            0 => Ok(vec![0, 1]),
-            _ => Err("unknown controller"),
-        }
+    #[test]
+    fn export_and_unexport_a_controller() {
+        let tmp = TempDir::new().unwrap();
+        let chip = tmp.child("pwmchip0");
+        fs::create_dir(&chip).unwrap();
+        let export = touch(chip.join("export"));
+        let unexport = touch(chip.join("unexport"));
+        let mut pwm = Pwm::with_sysfs_root(tmp.path().to_owned());
+
+        pwm.export(Controller(0)).unwrap();
+        assert_eq!(fs::read_to_string(&export).unwrap(), "1");
+
+        pwm.unexport(Controller(0)).unwrap();
+        assert_eq!(fs::read_to_string(&unexport).unwrap(), "1");
     }
 
-    #[instrument]
-    fn export(&mut self, controller: ControllerId) -> Result<(), &'static str> {
-        debug!("export");
-        match (controller, self.exported) {
-            (0, false) => {
-                self.exported = true;
-                Ok(())
-            }
-            (0, true) => Err("controller already exported"),
-            _ => Err("unknown controller"),
-        }
-    }
-
-    #[instrument]
-    fn unexport(&mut self, controller: ControllerId) -> Result<(), &'static str> {
-        debug!("unexport");
-        match (controller, self.exported) {
-            (0, true) => {
-                self.exported = false;
-                Ok(())
-            }
-            (0, false) => Err("controller not exported"),
-            _ => Err("unknown controller"),
-        }
-    }
-
-    #[instrument]
-    fn set_period(
-        &mut self,
-        controller: ControllerId,
-        channel: ChannelId,
-        period: u64,
-    ) -> Result<(), &'static str> {
-        debug!("set_period");
-        match controller {
-            0 => {
-                self.period = period;
-                Ok(())
-            }
-            _ => Err("unknown controller"),
-        }
-    }
-
-    #[instrument]
-    fn set_duty_cycle(
-        &mut self,
-        controller: ControllerId,
-        channel: ChannelId,
-        duty_cycle: u64,
-    ) -> Result<(), &'static str> {
-        debug!("set_duty_cycle");
-        match controller {
-            0 if duty_cycle > self.period => Err("duty cycle greater than period"),
-            0 => {
-                self.duty_cycle = duty_cycle;
-                Ok(())
-            }
-            _ => Err("unknown controller"),
-        }
-    }
-
-    #[instrument]
-    fn enable(&mut self, controller: ControllerId, channel: ChannelId) -> Result<(), &'static str> {
-        debug!("enable");
-        match (controller, self.enabled) {
-            (0, false) => {
-                self.enabled = true;
-                Ok(())
-            }
-            // Enabling an enabled PWM is a no-op.
-            (0, true) => Ok(()),
-            _ => Err("unknown controller"),
-        }
-    }
-
-    #[instrument]
-    fn disable(
-        &mut self,
-        controller: ControllerId,
-        channel: ChannelId,
-    ) -> Result<(), &'static str> {
-        debug!("disable");
-        match (controller, self.enabled) {
-            (0, true) => {
-                self.enabled = false;
-                Ok(())
-            }
-            // Disabling a disabled PWM is a no-op.
-            (0, false) => Ok(()),
-            _ => Err("unknown controller"),
-        }
+    fn touch(path: PathBuf) -> PathBuf {
+        fs::write(&path, b"").unwrap();
+        path
     }
 }
