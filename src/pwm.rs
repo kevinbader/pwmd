@@ -1,6 +1,9 @@
 use std::{
+    fmt::Display,
     fs,
     path::{Path, PathBuf},
+    str::FromStr,
+    time::Duration,
 };
 
 use thiserror::Error;
@@ -17,6 +20,14 @@ pub enum PwmError {
     NotExported(Controller),
     #[error("failed to {0:?}: {1}")]
     Sysfs(Access, #[source] std::io::Error),
+    #[error("duty cycle value must be less than the period value")]
+    DutyCycleNotLessThanPeriod,
+    #[error("legal polarity values: 'normal', 'inversed'")]
+    InvalidPolarity,
+    #[error("{0} cannot be changed while channel is enabled")]
+    IllegalChangeWhileEnabled(&'static str),
+    #[error("expected boolean value, got {0:?}")]
+    NotBoolean(String),
 }
 
 /// Used in PwmError to format sysfs related errors.
@@ -133,6 +144,127 @@ impl Pwm {
         debug!("writing to {:?}", &enable_file);
         fs::write(&enable_file, value).map_err(|e| PwmError::Sysfs(Access::Write(enable_file), e))
     }
+
+    /// The total period of the PWM signal (read/write). Value is in nanoseconds
+    /// and is the sum of the active and inactive time of the PWM.
+    #[instrument]
+    pub fn set_period(
+        &mut self,
+        controller: Controller,
+        channel: Channel,
+        period: Duration,
+    ) -> Result<(), PwmError> {
+        let chip_dir = self.sysfs_root.join(format!("pwmchip{}", controller.0));
+        if !chip_dir.exists() {
+            return Err(PwmError::ControllerNotFound(controller));
+        }
+
+        let n_pwm = read_npwm_file(&chip_dir)?;
+        if channel.0 >= n_pwm {
+            return Err(PwmError::ChannelNotFound(controller, channel));
+        }
+
+        let period_file = chip_dir.join(format!("pwm{}/period", channel.0));
+        let duty_cycle_file = chip_dir.join(format!("pwm{}/duty_cycle", channel.0));
+        if !period_file.exists() || !duty_cycle_file.exists() {
+            return Err(PwmError::NotExported(controller));
+        }
+
+        let duty_cycle = fs::read_to_string(&duty_cycle_file)
+            .map_err(|e| PwmError::Sysfs(Access::Read(duty_cycle_file), e))?
+            .parse::<u64>()
+            .map(|ns| Duration::from_nanos(ns))
+            .expect("duty cycle file expected to contain a number");
+
+        if duty_cycle >= period {
+            return Err(PwmError::DutyCycleNotLessThanPeriod);
+        }
+
+        debug!("writing to {:?}", &period_file);
+        fs::write(&period_file, period.as_nanos().to_string())
+            .map_err(|e| PwmError::Sysfs(Access::Write(period_file), e))
+    }
+
+    /// The active time of the PWM signal (read/write). Value is in nanoseconds
+    /// and must be less than the period.
+    #[instrument]
+    pub fn set_duty_cycle(
+        &mut self,
+        controller: Controller,
+        channel: Channel,
+        duty_cycle: Duration,
+    ) -> Result<(), PwmError> {
+        let chip_dir = self.sysfs_root.join(format!("pwmchip{}", controller.0));
+        if !chip_dir.exists() {
+            return Err(PwmError::ControllerNotFound(controller));
+        }
+
+        let n_pwm = read_npwm_file(&chip_dir)?;
+        if channel.0 >= n_pwm {
+            return Err(PwmError::ChannelNotFound(controller, channel));
+        }
+
+        let period_file = chip_dir.join(format!("pwm{}/period", channel.0));
+        let duty_cycle_file = chip_dir.join(format!("pwm{}/duty_cycle", channel.0));
+        if !period_file.exists() || !duty_cycle_file.exists() {
+            return Err(PwmError::NotExported(controller));
+        }
+
+        let period = fs::read_to_string(&period_file)
+            .map_err(|e| PwmError::Sysfs(Access::Read(period_file), e))?
+            .parse::<u64>()
+            .map(|ns| Duration::from_nanos(ns))
+            .expect("period file expected to contain a number");
+
+        if duty_cycle >= period {
+            return Err(PwmError::DutyCycleNotLessThanPeriod);
+        }
+
+        debug!("writing to {:?}", &duty_cycle_file);
+        fs::write(&duty_cycle_file, duty_cycle.as_nanos().to_string())
+            .map_err(|e| PwmError::Sysfs(Access::Write(duty_cycle_file), e))
+    }
+
+    /// Changes the polarity of the PWM signal (read/write). Writes to this
+    /// property only work if the PWM chip supports changing the polarity. The
+    /// polarity can only be changed if the PWM is not enabled. Value is the
+    /// string “normal” or “inversed”.
+    #[instrument]
+    pub fn set_polarity(
+        &mut self,
+        controller: Controller,
+        channel: Channel,
+        polarity: Polarity,
+    ) -> Result<(), PwmError> {
+        let chip_dir = self.sysfs_root.join(format!("pwmchip{}", controller.0));
+        if !chip_dir.exists() {
+            return Err(PwmError::ControllerNotFound(controller));
+        }
+
+        let n_pwm = read_npwm_file(&chip_dir)?;
+        if channel.0 >= n_pwm {
+            return Err(PwmError::ChannelNotFound(controller, channel));
+        }
+
+        let polarity_file = chip_dir.join(format!("pwm{}/polarity", channel.0));
+        let enable_file = chip_dir.join(format!("pwm{}/enable", channel.0));
+        if !polarity_file.exists() || !enable_file.exists() {
+            return Err(PwmError::NotExported(controller));
+        }
+
+        // setting polarity is only allowed if channel is disabled:
+        let is_enabled = fs::read_to_string(&enable_file)
+            .map_err(|e| PwmError::Sysfs(Access::Read(enable_file), e))
+            .and_then(parse_bool)?;
+
+        if is_enabled {
+            return Err(PwmError::IllegalChangeWhileEnabled("polarity"));
+        }
+
+        debug!("writing to {:?}", &polarity_file);
+        fs::write(&polarity_file, polarity.to_string())
+            .map_err(|e| PwmError::Sysfs(Access::Write(polarity_file), e))
+    }
 }
 
 fn read_npwm_file(chip_dir: &Path) -> Result<u32, PwmError> {
@@ -145,6 +277,44 @@ fn read_npwm_file(chip_dir: &Path) -> Result<u32, PwmError> {
             Ok(num)
         }
         Err(e) => return Err(PwmError::Sysfs(Access::Read(npwm_file), e)),
+    }
+}
+
+fn parse_bool(s: String) -> Result<bool, PwmError> {
+    // sysfs compatible according to http://lkml.iu.edu/hypermail/linux/kernel/1103.2/02488.html
+    match s.to_lowercase().as_ref() {
+        "1" | "y" | "yes" | "true" => Ok(true),
+        "0" | "n" | "no" | "false" | "" => Ok(false),
+        _ => Err(PwmError::NotBoolean(s)),
+    }
+}
+
+#[derive(Debug)]
+pub enum Polarity {
+    Normal,
+    Inversed,
+}
+
+impl Display for Polarity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use Polarity::*;
+        match *self {
+            Normal => write!(f, "normal"),
+            Inversed => write!(f, "inversed"),
+        }
+    }
+}
+
+impl FromStr for Polarity {
+    type Err = PwmError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        use Polarity::*;
+        match s {
+            "normal" => Ok(Normal),
+            "inversed" => Ok(Inversed),
+            _ => Err(PwmError::InvalidPolarity),
+        }
     }
 }
 
