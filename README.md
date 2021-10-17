@@ -21,6 +21,7 @@ $ sudo pwmd
 ## TODOs
 
 - [ ] CONTRIBUTORS file
+- [ ] GitHub Actions pipeline setup
 - [ ] systemd file
 - [ ] describe how to control logging output
 - [ ] high-level API specifically for LEDs
