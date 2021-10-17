@@ -1,5 +1,8 @@
 # pwmd
 
+[![Crates.io](https://img.shields.io/crates/v/pwmd?style=flat-square)](https://crates.io/crates/pwmd)
+[![docs.rs](https://img.shields.io/docsrs/pwmd?style=flat-square)](https://docs.rs/pwmd/)
+
 pwmd exposes the Linux' sysfs PWM interface to DBUS.
 
 ## Why
