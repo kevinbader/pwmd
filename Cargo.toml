@@ -2,12 +2,12 @@
 name = "pwmd"
 version = "0.0.1"
 edition = "2018"
-authors = [
-    "Kevin Bader"
-]
+authors = ["Kevin Bader"]
 license = "MIT"
-description = "Exposes PWM chips to DBUS."
 repository = "https://github.com/kevinbader/pwmd"
+description = "Exposes PWM chips to DBUS."
+categories = ["api-bindings", "filesystem", "os::linux-apis"]
+keywords = ["pwm", "dbus", "led"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
