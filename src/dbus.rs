@@ -31,7 +31,7 @@ pub fn listen(args: Args, on_ready: impl FnOnce()) -> anyhow::Result<()> {
         .request_name(&args.dbus_service_name, BitFlags::empty())?;
 
     let mut object_server = zbus::ObjectServer::new(&connection);
-    object_server.at(&"/pwm1".try_into()?, pwm_api)?;
+    object_server.at(&"/com/kevinbader/pwmd/pwm1".try_into()?, pwm_api)?;
     // object_server.at(&"/led".try_into()?, led_api)?;
 
     on_ready();

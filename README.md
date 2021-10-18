@@ -18,6 +18,20 @@ $ cargo install --git https://github.com/kevinbader/pwmd
 $ sudo pwmd
 ```
 
+pwmd then exposes its API on DBUS. For example, you could export the first PWM controller using `dbus-send`:
+
+```bash
+SERVICE="com.kevinbader.pwmd"
+OBJECT_PATH="/com/kevinbader/pwmd/pwm1"
+INTERFACE="com.kevinbader.pwmd.pwm1"
+METHOD="Export"
+dbus-send --system \
+  --type=method_call --print-reply \
+  --dest=$SERVICE \
+  $OBJECT_PATH \
+  ${INTERFACE}.${METHOD} uint32:0
+```
+
 ## TODOs
 
 - [ ] CONTRIBUTORS file
