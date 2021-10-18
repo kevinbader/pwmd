@@ -51,15 +51,28 @@ struct PwmApi {
 
 #[dbus_interface(name = "com.kevinbader.pwmd.pwm1")]
 impl PwmApi {
-    #[dbus_interface(property)]
-    async fn mood(&self) -> &str {
-        "happy :-)"
-    }
-
     #[instrument]
     async fn quit(&mut self) {
         info!("quit");
         self.done.notify_one();
+    }
+
+    #[instrument]
+    async fn npwm(&self, controller: u32) -> fdo::Result<u32> {
+        let controller = Controller(controller);
+        self.pwm.npwm(&controller).map_err(|e| {
+            warn!("{:?}", e);
+            fdo::Error::Failed(e.to_string())
+        })
+    }
+
+    #[instrument]
+    async fn is_exported(&self, controller: u32) -> fdo::Result<bool> {
+        let controller = Controller(controller);
+        self.pwm.is_exported(&controller).map_err(|e| {
+            warn!("{:?}", e);
+            fdo::Error::Failed(e.to_string())
+        })
     }
 
     #[instrument]
@@ -75,6 +88,15 @@ impl PwmApi {
     async fn unexport(&mut self, controller: u32) -> fdo::Result<()> {
         let controller = Controller(controller);
         self.pwm.unexport(controller).map_err(|e| {
+            warn!("{:?}", e);
+            fdo::Error::Failed(e.to_string())
+        })
+    }
+
+    async fn is_enabled(&self, controller: u32, channel: u32) -> fdo::Result<bool> {
+        let controller = Controller(controller);
+        let channel = Channel(channel);
+        self.pwm.is_enabled(&controller, &channel).map_err(|e| {
             warn!("{:?}", e);
             fdo::Error::Failed(e.to_string())
         })

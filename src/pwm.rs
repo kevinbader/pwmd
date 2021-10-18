@@ -28,6 +28,8 @@ pub enum PwmError {
     IllegalChangeWhileEnabled(&'static str),
     #[error("expected boolean value, got {0:?}")]
     NotBoolean(String),
+    #[error("expected a duration in nanoseconds, got {0:?}: {1}")]
+    NotADuration(String, #[source] std::num::ParseIntError),
 }
 
 /// Used in PwmError to format sysfs related errors.
@@ -59,6 +61,8 @@ pub struct Controller(pub u32);
 #[derive(Debug, Clone)]
 pub struct Channel(pub u32);
 
+type Result<T> = std::result::Result<T, PwmError>;
+
 impl Pwm {
     /// Initialize PWM.
     pub fn new() -> Self {
@@ -73,76 +77,65 @@ impl Pwm {
         Self { sysfs_root }
     }
 
+    /// Returns the number of channels for the given controller.
+    #[instrument]
+    pub fn npwm(&self, controller: &Controller) -> Result<u32> {
+        self.controller_file(controller, "npwm")
+            .and_then(|path| read(&path))
+            .map(|s| {
+                s.trim()
+                    .parse::<u32>()
+                    .expect("npwm expected to contain the number of channels")
+            })
+    }
+
+    /// Returns whether a controller's channels are ready to be used.
+    #[instrument]
+    pub fn is_exported(&self, controller: &Controller) -> Result<bool> {
+        // A controller is exported if the channel subdirectories are there.
+        // Since a controller without any channel doesn't make sense, it's
+        // enough to check for the existance of the first channel's enable file.
+        match self.channel_dir(controller, &Channel(0)) {
+            Ok(_) => Ok(true),
+            Err(PwmError::NotExported(_)) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
     /// Export a PWM controller, which enables access to its channels.
     #[instrument]
-    pub fn export(&mut self, controller: Controller) -> Result<(), PwmError> {
-        // Exporting an already exported controller is a no-op, so we don't need
-        // to check whether the controller is already exported.
-        let path = self
-            .sysfs_root
-            .join(format!("pwmchip{}/export", controller.0));
-        if !path.exists() {
-            return Err(PwmError::ControllerNotFound(controller));
-        }
-
-        debug!("writing to {:?}", &path);
-        fs::write(&path, "1").map_err(|e| PwmError::Sysfs(Access::Write(path), e))
+    pub fn export(&mut self, controller: Controller) -> Result<()> {
+        self.controller_file(&controller, "export")
+            .and_then(|path| write(&path, "1"))
     }
 
     /// Unexport a PWM controller, which disables access to its channels.
     #[instrument]
-    pub fn unexport(&mut self, controller: Controller) -> Result<(), PwmError> {
-        // Un-exporting an already un-exported controller is a no-op, so we
-        // don't need to check whether the controller is actually exported.
-        let path = self
-            .sysfs_root
-            .join(format!("pwmchip{}/unexport", controller.0));
-        if !path.exists() {
-            return Err(PwmError::ControllerNotFound(controller));
-        }
+    pub fn unexport(&mut self, controller: Controller) -> Result<()> {
+        self.controller_file(&controller, "unexport")
+            .and_then(|path| write(&path, "1"))
+    }
 
-        fs::write(&path, "1").map_err(|e| PwmError::Sysfs(Access::Write(path), e))
+    /// Returns whether a controller's channel is enabled.
+    #[instrument]
+    pub fn is_enabled(&self, controller: &Controller, channel: &Channel) -> Result<bool> {
+        self.channel_file(controller, channel, "enable")
+            .and_then(|path| read(&path))
+            .and_then(parse_bool)
     }
 
     /// Enable a channel.
     #[instrument]
-    pub fn enable(&mut self, controller: Controller, channel: Channel) -> Result<(), PwmError> {
-        self.update_enable_file(controller, channel, "1")
+    pub fn enable(&mut self, controller: Controller, channel: Channel) -> Result<()> {
+        self.channel_file(&controller, &channel, "enable")
+            .and_then(|path| write(&path, "1"))
     }
 
     /// Disable a channel.
     #[instrument]
-    pub fn disable(&mut self, controller: Controller, channel: Channel) -> Result<(), PwmError> {
-        self.update_enable_file(controller, channel, "0")
-    }
-
-    fn update_enable_file(
-        &mut self,
-        controller: Controller,
-        channel: Channel,
-        value: &str,
-    ) -> Result<(), PwmError> {
-        // Enabling/disabling an already enabled/disabled channel is a no-op, so
-        // we don't need to check whether the channel is already
-        // enabled/disabled.
-
-        let chip_dir = self.sysfs_root.join(format!("pwmchip{}", controller.0));
-        if !chip_dir.exists() {
-            return Err(PwmError::ControllerNotFound(controller));
-        }
-
-        let n_pwm = read_npwm_file(&chip_dir)?;
-        if channel.0 >= n_pwm {
-            return Err(PwmError::ChannelNotFound(controller, channel));
-        }
-
-        let enable_file = chip_dir.join(format!("pwm{}/enable", channel.0));
-        if !enable_file.exists() {
-            return Err(PwmError::NotExported(controller));
-        }
-
-        debug!("writing to {:?}", &enable_file);
-        fs::write(&enable_file, value).map_err(|e| PwmError::Sysfs(Access::Write(enable_file), e))
+    pub fn disable(&mut self, controller: Controller, channel: Channel) -> Result<()> {
+        self.channel_file(&controller, &channel, "enable")
+            .and_then(|path| write(&path, "0"))
     }
 
     /// The total period of the PWM signal (read/write). Value is in nanoseconds
@@ -153,36 +146,18 @@ impl Pwm {
         controller: Controller,
         channel: Channel,
         period: Duration,
-    ) -> Result<(), PwmError> {
-        let chip_dir = self.sysfs_root.join(format!("pwmchip{}", controller.0));
-        if !chip_dir.exists() {
-            return Err(PwmError::ControllerNotFound(controller));
-        }
-
-        let n_pwm = read_npwm_file(&chip_dir)?;
-        if channel.0 >= n_pwm {
-            return Err(PwmError::ChannelNotFound(controller, channel));
-        }
-
-        let period_file = chip_dir.join(format!("pwm{}/period", channel.0));
-        let duty_cycle_file = chip_dir.join(format!("pwm{}/duty_cycle", channel.0));
-        if !period_file.exists() || !duty_cycle_file.exists() {
-            return Err(PwmError::NotExported(controller));
-        }
-
-        let duty_cycle = fs::read_to_string(&duty_cycle_file)
-            .map_err(|e| PwmError::Sysfs(Access::Read(duty_cycle_file), e))?
-            .parse::<u64>()
-            .map(Duration::from_nanos)
-            .expect("duty cycle file expected to contain a number");
+    ) -> Result<()> {
+        let duty_cycle = self
+            .channel_file(&controller, &channel, "duty_cycle")
+            .and_then(|path| read(&path))
+            .and_then(parse_duration)?;
 
         if duty_cycle >= period {
             return Err(PwmError::DutyCycleNotLessThanPeriod);
         }
 
-        debug!("writing to {:?}", &period_file);
-        fs::write(&period_file, period.as_nanos().to_string())
-            .map_err(|e| PwmError::Sysfs(Access::Write(period_file), e))
+        self.channel_file(&controller, &channel, "period")
+            .and_then(|path| write(&path, &period.as_nanos().to_string()))
     }
 
     /// The active time of the PWM signal (read/write). Value is in nanoseconds
@@ -193,36 +168,18 @@ impl Pwm {
         controller: Controller,
         channel: Channel,
         duty_cycle: Duration,
-    ) -> Result<(), PwmError> {
-        let chip_dir = self.sysfs_root.join(format!("pwmchip{}", controller.0));
-        if !chip_dir.exists() {
-            return Err(PwmError::ControllerNotFound(controller));
-        }
-
-        let n_pwm = read_npwm_file(&chip_dir)?;
-        if channel.0 >= n_pwm {
-            return Err(PwmError::ChannelNotFound(controller, channel));
-        }
-
-        let period_file = chip_dir.join(format!("pwm{}/period", channel.0));
-        let duty_cycle_file = chip_dir.join(format!("pwm{}/duty_cycle", channel.0));
-        if !period_file.exists() || !duty_cycle_file.exists() {
-            return Err(PwmError::NotExported(controller));
-        }
-
-        let period = fs::read_to_string(&period_file)
-            .map_err(|e| PwmError::Sysfs(Access::Read(period_file), e))?
-            .parse::<u64>()
-            .map(Duration::from_nanos)
-            .expect("period file expected to contain a number");
+    ) -> Result<()> {
+        let period = self
+            .channel_file(&controller, &channel, "period")
+            .and_then(|path| read(&path))
+            .and_then(parse_duration)?;
 
         if duty_cycle >= period {
             return Err(PwmError::DutyCycleNotLessThanPeriod);
         }
 
-        debug!("writing to {:?}", &duty_cycle_file);
-        fs::write(&duty_cycle_file, duty_cycle.as_nanos().to_string())
-            .map_err(|e| PwmError::Sysfs(Access::Write(duty_cycle_file), e))
+        self.channel_file(&controller, &channel, "duty_cycle")
+            .and_then(|path| write(&path, &duty_cycle.as_nanos().to_string()))
     }
 
     /// Changes the polarity of the PWM signal (read/write). Writes to this
@@ -235,58 +192,95 @@ impl Pwm {
         controller: Controller,
         channel: Channel,
         polarity: Polarity,
-    ) -> Result<(), PwmError> {
-        let chip_dir = self.sysfs_root.join(format!("pwmchip{}", controller.0));
-        if !chip_dir.exists() {
-            return Err(PwmError::ControllerNotFound(controller));
-        }
-
-        let n_pwm = read_npwm_file(&chip_dir)?;
-        if channel.0 >= n_pwm {
-            return Err(PwmError::ChannelNotFound(controller, channel));
-        }
-
-        let polarity_file = chip_dir.join(format!("pwm{}/polarity", channel.0));
-        let enable_file = chip_dir.join(format!("pwm{}/enable", channel.0));
-        if !polarity_file.exists() || !enable_file.exists() {
-            return Err(PwmError::NotExported(controller));
-        }
-
+    ) -> Result<()> {
         // setting polarity is only allowed if channel is disabled:
-        let is_enabled = fs::read_to_string(&enable_file)
-            .map_err(|e| PwmError::Sysfs(Access::Read(enable_file), e))
-            .and_then(parse_bool)?;
-
-        if is_enabled {
+        if self.is_enabled(&controller, &channel)? {
             return Err(PwmError::IllegalChangeWhileEnabled("polarity"));
         }
 
-        debug!("writing to {:?}", &polarity_file);
-        fs::write(&polarity_file, polarity.to_string())
-            .map_err(|e| PwmError::Sysfs(Access::Write(polarity_file), e))
+        self.channel_file(&controller, &channel, "polarity")
+            .and_then(|path| write(&path, &polarity.to_string()))
     }
-}
 
-fn read_npwm_file(chip_dir: &Path) -> Result<u32, PwmError> {
-    let npwm_file = chip_dir.join("npwm");
-    match fs::read_to_string(&npwm_file) {
-        Ok(s) => {
-            let num = s
-                .parse::<u32>()
-                .expect("npwm expected to contain the number of channels");
-            Ok(num)
+    fn controller_dir(&self, controller: &Controller) -> Result<PathBuf> {
+        let path = self.sysfs_root.join(format!("pwmchip{}", controller.0));
+        if path.is_dir() {
+            Ok(path)
+        } else {
+            Err(PwmError::ControllerNotFound(controller.clone()))
         }
-        Err(e) => Err(PwmError::Sysfs(Access::Read(npwm_file), e)),
+    }
+
+    fn controller_file(&self, controller: &Controller, fname: &str) -> Result<PathBuf> {
+        let path = self
+            .sysfs_root
+            .join(format!("pwmchip{}/{}", controller.0, fname));
+        if path.is_file() {
+            Ok(path)
+        } else {
+            Err(PwmError::ControllerNotFound(controller.clone()))
+        }
+    }
+
+    fn channel_dir(&self, controller: &Controller, channel: &Channel) -> Result<PathBuf> {
+        let n_pwm = self.npwm(controller)?;
+        if channel.0 >= n_pwm {
+            return Err(PwmError::ChannelNotFound(
+                controller.clone(),
+                channel.clone(),
+            ));
+        }
+
+        let path = self
+            .controller_dir(&controller)
+            .map(|controller| controller.join(format!("pwm{}", channel.0)))?;
+        if path.is_dir() {
+            Ok(path)
+        } else {
+            Err(PwmError::NotExported(controller.clone()))
+        }
+    }
+
+    fn channel_file(
+        &self,
+        controller: &Controller,
+        channel: &Channel,
+        fname: &str,
+    ) -> Result<PathBuf> {
+        let path = self
+            .channel_dir(&controller, &channel)
+            .map(|channel| channel.join(fname))?;
+        if path.is_file() {
+            Ok(path)
+        } else {
+            Err(PwmError::NotExported(controller.clone()))
+        }
     }
 }
 
-fn parse_bool(s: String) -> Result<bool, PwmError> {
+fn read(path: &Path) -> Result<String> {
+    fs::read_to_string(path).map_err(|e| PwmError::Sysfs(Access::Read(path.to_owned()), e))
+}
+
+fn write(path: &Path, contents: &str) -> Result<()> {
+    debug!("writing to {:?}", path);
+    fs::write(path, contents).map_err(|e| PwmError::Sysfs(Access::Write(path.to_owned()), e))
+}
+
+fn parse_bool(s: String) -> Result<bool> {
     // sysfs compatible according to http://lkml.iu.edu/hypermail/linux/kernel/1103.2/02488.html
-    match s.to_lowercase().as_ref() {
+    match s.trim_end().to_lowercase().as_ref() {
         "1" | "y" | "yes" | "true" => Ok(true),
         "0" | "n" | "no" | "false" | "" => Ok(false),
         _ => Err(PwmError::NotBoolean(s)),
     }
+}
+
+fn parse_duration(s: String) -> Result<Duration> {
+    s.trim_end()
+        .parse::<u64>()
+        .map_err(|e| PwmError::NotADuration(s, e))
+        .map(Duration::from_nanos)
 }
 
 #[derive(Debug)]
@@ -308,7 +302,7 @@ impl Display for Polarity {
 impl FromStr for Polarity {
     type Err = PwmError;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> Result<Self> {
         use Polarity::*;
         match s {
             "normal" => Ok(Normal),

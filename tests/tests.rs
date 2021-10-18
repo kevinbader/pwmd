@@ -54,6 +54,19 @@ fn happy_flow() -> anyhow::Result<()> {
     let export_file = touch(chip_dir.join("export"));
     let unexport_file = touch(chip_dir.join("unexport"));
 
+    // channel count is 1:
+    assert_eq!(
+        1,
+        connection
+            .call_method(destination, path, iface, "Npwm", &(0u32,))
+            .and_then(|res| res.body::<u32>())?
+    );
+
+    // should be unexported before:
+    assert!(!connection
+        .call_method(destination, path, iface, "IsExported", &(0u32,))
+        .and_then(|res| res.body::<bool>())?);
+
     // export the chip:
     let _ = connection.call_method(destination, path, iface, "Export", &(0u32,))?;
     check_file(&export_file, "1");
@@ -65,6 +78,11 @@ fn happy_flow() -> anyhow::Result<()> {
     let period_file = write(channel_dir.join("period"), "100");
     let duty_cycle_file = write(channel_dir.join("duty_cycle"), "70");
     let polarity_file = write(channel_dir.join("polarity"), "normal");
+
+    // should be exported afterwards:
+    assert!(connection
+        .call_method(destination, path, iface, "IsExported", &(0u32,))
+        .and_then(|res| res.body::<bool>())?);
 
     //
     // Change properties
@@ -101,8 +119,16 @@ fn happy_flow() -> anyhow::Result<()> {
     // Enable pwmchip0/pwm0:
     //
 
+    // should be disabled before:
+    assert!(!connection
+        .call_method(destination, path, iface, "IsEnabled", &(0u32, 0u32))
+        .and_then(|res| res.body::<bool>())?);
     let _ = connection.call_method(destination, path, iface, "Enable", &(0u32, 0u32))?;
+    // should be enabled afterwards:
     check_file(&enable_file, "1");
+    assert!(connection
+        .call_method(destination, path, iface, "IsEnabled", &(0u32, 0u32))
+        .and_then(|res| res.body::<bool>())?);
 
     //
     // Disable pwmchip0/pwm0:
