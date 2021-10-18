@@ -4,10 +4,8 @@ use tokio::sync::Notify;
 use tracing::{debug, info, instrument, warn};
 use zbus::{dbus_interface, fdo, names::WellKnownName, Connection, ConnectionBuilder};
 
-use crate::{
-    pwm::{Channel, Controller, Polarity, Pwm},
-    Args,
-};
+use crate::args::{Args, Bus};
+use crate::pwm::{Channel, Controller, Polarity, Pwm};
 
 /// Expose DBUS interface and block on handling connections.
 pub async fn listen(args: Args, on_ready: impl FnOnce()) -> anyhow::Result<()> {
@@ -23,7 +21,10 @@ pub async fn listen(args: Args, on_ready: impl FnOnce()) -> anyhow::Result<()> {
     };
     let done = pwm_api.done.clone();
 
-    let connection: Connection = ConnectionBuilder::session()?.build().await?;
+    let connection: Connection = match args.bus {
+        Bus::Session => ConnectionBuilder::session()?.build().await?,
+        Bus::System => ConnectionBuilder::system()?.build().await?,
+    };
     connection
         .object_server_mut()
         .await

@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use pwmd::Args;
+use pwmd::{args::Bus, Args};
 use rand::Rng;
 use temp_dir::TempDir;
 use zbus::{blocking::Connection, names::BusName};
@@ -25,6 +25,7 @@ fn happy_flow() -> anyhow::Result<()> {
     let (tx, rx) = channel();
     let dbus_thread = std::thread::spawn(move || {
         let args = Args {
+            bus: Bus::Session,
             dbus_service_name: dbus_service_name2,
             sysfs_root,
         };
@@ -134,6 +135,7 @@ fn test_duty_cycle_cannot_be_larger_than_period() -> anyhow::Result<()> {
     let (tx, rx) = channel();
     let dbus_thread = std::thread::spawn(move || {
         let args = Args {
+            bus: Bus::Session,
             dbus_service_name: dbus_service_name2,
             sysfs_root,
         };
@@ -222,6 +224,7 @@ fn test_polarity_cannot_be_changed_if_channel_is_enabled() -> anyhow::Result<()>
     let (tx, rx) = channel();
     let dbus_thread = std::thread::spawn(move || {
         let args = Args {
+            bus: Bus::Session,
             dbus_service_name: dbus_service_name2,
             sysfs_root,
         };
