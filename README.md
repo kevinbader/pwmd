@@ -32,6 +32,22 @@ dbus-send --system \
   ${INTERFACE}.${METHOD} uint32:0
 ```
 
+Use `busctl` to see available methods:
+
+```bash
+$ busctl --user introspect com.kevinbader.pwmd /com/kevinbader/pwmd/pwm1
+NAME                                TYPE      SIGNATURE RESULT/VALUE FLAGS
+com.kevinbader.pwmd.pwm1            interface -         -            -
+.Disable                            method    uu        (qs)         -
+.Enable                             method    uu        (qs)         -
+.Export                             method    u         (qs)         -
+.Quit                               method    -         (qs)         -
+.SetDutyCycleNs                     method    uut       (qs)         -
+.SetPeriodNs                        method    uut       (qs)         -
+.SetPolarity                        method    uus       (qs)         -
+.Unexport                           method    u         (qs)         -
+```
+
 ## TODOs
 
 - [ ] CONTRIBUTORS file

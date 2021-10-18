@@ -1,13 +1,15 @@
 use std::{
+    convert::TryInto,
     fs,
     path::{Path, PathBuf},
     sync::mpsc::channel,
     time::Duration,
 };
 
-use pwmd::{dbus::StatusErrorPair, Args};
+use pwmd::Args;
 use rand::Rng;
 use temp_dir::TempDir;
+use zbus::{blocking::Connection, names::BusName};
 
 #[test]
 fn happy_flow() -> anyhow::Result<()> {
@@ -26,13 +28,18 @@ fn happy_flow() -> anyhow::Result<()> {
             dbus_service_name: dbus_service_name2,
             sysfs_root,
         };
-        pwmd::dbus::listen(args, || tx.send(()).unwrap()).unwrap();
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            pwmd::dbus::listen(args, || tx.send(()).unwrap())
+                .await
+                .unwrap();
+        });
     });
     rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
-    let connection = zbus::Connection::new_session()?;
-    let destination = Some(dbus_service_name.as_ref());
-    let path = "/pwm1";
+    let connection = Connection::session()?;
+    let destination: BusName<'_> = dbus_service_name.as_str().try_into().unwrap();
+    let destination = Some(&destination);
+    let path = "/com/kevinbader/pwmd/pwm1";
     let iface = Some("com.kevinbader.pwmd.pwm1");
 
     //
@@ -47,9 +54,7 @@ fn happy_flow() -> anyhow::Result<()> {
     let unexport_file = touch(chip_dir.join("unexport"));
 
     // export the chip:
-    let res = connection.call_method(destination, path, iface, "Export", &(0u32,))?;
-    let res: StatusErrorPair = res.body().unwrap();
-    assert!(matches!(&res, (200, s) if s == ""), "got {:?}", &res);
+    let _ = connection.call_method(destination, path, iface, "Export", &(0u32,))?;
     check_file(&export_file, "1");
 
     // fake channel pwm0:
@@ -64,69 +69,55 @@ fn happy_flow() -> anyhow::Result<()> {
     // Change properties
     //
 
-    let res = connection.call_method(
+    let _ = connection.call_method(
         destination,
         path,
         iface,
         "SetPeriodNs",
         &(0u32, 0u32, 1000u64),
     )?;
-    let res: StatusErrorPair = res.body().unwrap();
-    assert!(matches!(&res, (200, s) if s == ""), "got {:?}", &res);
     check_file(&period_file, "1000");
 
-    let res = connection.call_method(
+    let _ = connection.call_method(
         destination,
         path,
         iface,
         "SetDutyCycleNs",
         &(0u32, 0u32, 700u64),
     )?;
-    let res: StatusErrorPair = res.body().unwrap();
-    assert!(matches!(&res, (200, s) if s == ""), "got {:?}", &res);
     check_file(&duty_cycle_file, "700");
 
-    let res = connection.call_method(
+    let _ = connection.call_method(
         destination,
         path,
         iface,
         "SetPolarity",
         &(0u32, 0u32, "inversed"),
     )?;
-    let res: StatusErrorPair = res.body().unwrap();
-    assert!(matches!(&res, (200, s) if s == ""), "got {:?}", &res);
     check_file(&polarity_file, "inversed");
 
     //
     // Enable pwmchip0/pwm0:
     //
 
-    let res = connection.call_method(destination, path, iface, "Enable", &(0u32, 0u32))?;
-    let res: StatusErrorPair = res.body().unwrap();
-    assert!(matches!(&res, (200, s) if s == ""), "got {:?}", &res);
+    let _ = connection.call_method(destination, path, iface, "Enable", &(0u32, 0u32))?;
     check_file(&enable_file, "1");
 
     //
     // Disable pwmchip0/pwm0:
     //
 
-    let res = connection.call_method(destination, path, iface, "Disable", &(0u32, 0u32))?;
-    let res: StatusErrorPair = res.body().unwrap();
-    assert!(matches!(&res, (200, s) if s == ""), "got {:?}", &res);
+    let _ = connection.call_method(destination, path, iface, "Disable", &(0u32, 0u32))?;
     check_file(&enable_file, "0");
 
     //
     // Unexport pwmchip0:
     //
 
-    let res = connection.call_method(destination, path, iface, "Unexport", &(0u32,))?;
-    let res: StatusErrorPair = res.body().unwrap();
-    assert!(matches!(&res, (200, s) if s == ""), "got {:?}", &res);
+    let _ = connection.call_method(destination, path, iface, "Unexport", &(0u32,))?;
     check_file(&unexport_file, "1");
 
-    let res = connection.call_method(destination, path, iface, "Quit", &())?;
-    let res: StatusErrorPair = res.body().unwrap();
-    assert!(matches!(res, (200, s) if s == ""));
+    let _ = connection.call_method(destination, path, iface, "Quit", &())?;
 
     dbus_thread.join().unwrap();
     Ok(())
@@ -146,13 +137,18 @@ fn test_duty_cycle_cannot_be_larger_than_period() -> anyhow::Result<()> {
             dbus_service_name: dbus_service_name2,
             sysfs_root,
         };
-        pwmd::dbus::listen(args, || tx.send(()).unwrap()).unwrap();
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            pwmd::dbus::listen(args, || tx.send(()).unwrap())
+                .await
+                .unwrap();
+        });
     });
     rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
-    let connection = zbus::Connection::new_session()?;
-    let destination = Some(dbus_service_name.as_ref());
-    let path = "/pwm1";
+    let connection = Connection::session()?;
+    let destination: BusName<'_> = dbus_service_name.as_str().try_into().unwrap();
+    let destination = Some(&destination);
+    let path = "/com/kevinbader/pwmd/pwm1";
     let iface = Some("com.kevinbader.pwmd.pwm1");
 
     // fake controller pwmchip0:
@@ -162,9 +158,7 @@ fn test_duty_cycle_cannot_be_larger_than_period() -> anyhow::Result<()> {
     let _ = touch(chip_dir.join("export"));
 
     // export the chip:
-    let res = connection.call_method(destination, path, iface, "Export", &(0u32,))?;
-    let res: StatusErrorPair = res.body().unwrap();
-    assert!(matches!(res, (200, s) if s == ""));
+    let _ = connection.call_method(destination, path, iface, "Export", &(0u32,))?;
 
     // fake channel pwm0:
     let channel_dir = chip_dir.join("pwm0");
@@ -173,49 +167,46 @@ fn test_duty_cycle_cannot_be_larger_than_period() -> anyhow::Result<()> {
     let period_file = write(channel_dir.join("period"), "100");
     let duty_cycle_file = write(channel_dir.join("duty_cycle"), "70");
 
-    // set duty_cycle to the value of period:
-    let res = connection.call_method(
+    // setting duty_cycle to the value of period should fail:
+    let error = match connection.call_method(
         destination,
         path,
         iface,
         "SetDutyCycleNs",
         &(0u32, 0u32, 100u64),
-    )?;
-    let (status, error): StatusErrorPair = res.body().unwrap();
-    let error = error.to_lowercase();
+    ) {
+        Err(zbus::Error::MethodError(_, Some(error), _)) => error.to_lowercase(),
+        x => panic!("expected MethodError, got: {:?}", x),
+    };
     assert!(
         error.contains("less than"),
         "expected an error about duty cycle not being less than period, but got this: {}",
         error
     );
-    assert_eq!(status, 400);
     // still the old value for duty cycle:
     check_file(&duty_cycle_file, "70");
 
     // now we try setting the period to the same value as duty cycle, which should also fail:
-    let res = connection.call_method(
+    let error = match connection.call_method(
         destination,
         path,
         iface,
         "SetPeriodNs",
         &(0u32, 0u32, 70u64),
-    )?;
-    let (status, error): StatusErrorPair = res.body().unwrap();
-    let error = error.to_lowercase();
+    ) {
+        Err(zbus::Error::MethodError(_, Some(error), _)) => error.to_lowercase(),
+        x => panic!("expected MethodError, got: {:?}", x),
+    };
     assert!(
         error.contains("less than"),
         "expected an error about duty cycle not being less than period, but got this: {}",
         error
     );
-    assert_eq!(status, 400);
     // still the old value for period:
     check_file(&period_file, "100");
 
     // quit:
-    let res = connection.call_method(destination, path, iface, "Quit", &())?;
-    let res: StatusErrorPair = res.body().unwrap();
-    assert!(matches!(res, (200, s) if s == ""));
-
+    let _ = connection.call_method(destination, path, iface, "Quit", &())?;
     dbus_thread.join().unwrap();
     Ok(())
 }
@@ -234,13 +225,18 @@ fn test_polarity_cannot_be_changed_if_channel_is_enabled() -> anyhow::Result<()>
             dbus_service_name: dbus_service_name2,
             sysfs_root,
         };
-        pwmd::dbus::listen(args, || tx.send(()).unwrap()).unwrap();
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            pwmd::dbus::listen(args, || tx.send(()).unwrap())
+                .await
+                .unwrap();
+        });
     });
     rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
-    let connection = zbus::Connection::new_session()?;
-    let destination = Some(dbus_service_name.as_ref());
-    let path = "/pwm1";
+    let connection = Connection::session()?;
+    let destination: BusName<'_> = dbus_service_name.as_str().try_into().unwrap();
+    let destination = Some(&destination);
+    let path = "/com/kevinbader/pwmd/pwm1";
     let iface = Some("com.kevinbader.pwmd.pwm1");
 
     // fake controller pwmchip0:
@@ -250,9 +246,7 @@ fn test_polarity_cannot_be_changed_if_channel_is_enabled() -> anyhow::Result<()>
     let _ = touch(chip_dir.join("export"));
 
     // export the chip:
-    let res = connection.call_method(destination, path, iface, "Export", &(0u32,))?;
-    let res: StatusErrorPair = res.body().unwrap();
-    assert!(matches!(res, (200, s) if s == ""));
+    let _ = connection.call_method(destination, path, iface, "Export", &(0u32,))?;
 
     // fake channel pwm0:
     let channel_dir = chip_dir.join("pwm0");
@@ -261,33 +255,28 @@ fn test_polarity_cannot_be_changed_if_channel_is_enabled() -> anyhow::Result<()>
     let polarity_file = write(channel_dir.join("polarity"), "normal");
 
     // enable pwmchip0/pwm0:
-    let res = connection.call_method(destination, path, iface, "Enable", &(0u32, 0u32))?;
-    let res: StatusErrorPair = res.body().unwrap();
-    assert!(matches!(res, (200, s) if s == ""));
+    let _ = connection.call_method(destination, path, iface, "Enable", &(0u32, 0u32))?;
 
     // set polarity - this should fail:
-    let res = connection.call_method(
+    let error = match connection.call_method(
         destination,
         path,
         iface,
         "SetPolarity",
         &(0u32, 0u32, "inversed"),
-    )?;
-    let (status, error): StatusErrorPair = res.body().unwrap();
-    let error = error.to_lowercase();
+    ) {
+        Err(zbus::Error::MethodError(_, Some(error), _)) => error.to_lowercase(),
+        x => panic!("expected MethodError, got: {:?}", x),
+    };
     assert!(
         error.contains("enabled") || error.contains("disabled"),
         "expected an error about channel having to be disabled for this to work, but got this: {}",
         error
     );
-    assert_eq!(status, 400);
     check_file(&polarity_file, "normal");
 
     // quit:
-    let res = connection.call_method(destination, path, iface, "Quit", &())?;
-    let res: StatusErrorPair = res.body().unwrap();
-    assert!(matches!(res, (200, s) if s == ""));
-
+    let _ = connection.call_method(destination, path, iface, "Quit", &())?;
     dbus_thread.join().unwrap();
     Ok(())
 }
