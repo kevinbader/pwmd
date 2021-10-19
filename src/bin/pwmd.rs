@@ -4,7 +4,7 @@ use tracing::info;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    pwmd::setup_logging().unwrap();
+    pwmd::setup_logging();
     let opts = Args::from_args();
     pwmd::dbus::listen(opts, || {
         info!("Ready.");

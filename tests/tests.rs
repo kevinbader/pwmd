@@ -14,7 +14,7 @@ use zbus::{blocking::Connection, names::BusName};
 #[test]
 fn happy_flow() -> anyhow::Result<()> {
     // std::env::set_var("RUST_BACKTRACE", "full");
-    pwmd::setup_logging().unwrap();
+    pwmd::setup_logging();
 
     // fake /sys/class/pwm directory:
     let tmpdir = TempDir::new().unwrap();
