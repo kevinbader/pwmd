@@ -20,8 +20,8 @@ pub enum PwmError {
     NotExported(Controller),
     #[error("failed to {0:?}: {1}")]
     Sysfs(Access, #[source] std::io::Error),
-    #[error("duty cycle value must be less than the period value")]
-    DutyCycleNotLessThanPeriod,
+    #[error("duty cycle value must not be greater than the period value")]
+    DutyCycleGreaterThanPeriod,
     #[error("legal polarity values: 'normal', 'inversed'")]
     InvalidPolarity,
     #[error("{0} cannot be changed while channel is enabled")]
@@ -152,8 +152,8 @@ impl Pwm {
             .and_then(|path| read(&path))
             .and_then(parse_duration)?;
 
-        if duty_cycle >= period {
-            return Err(PwmError::DutyCycleNotLessThanPeriod);
+        if duty_cycle > period {
+            return Err(PwmError::DutyCycleGreaterThanPeriod);
         }
 
         self.channel_file(&controller, &channel, "period")
@@ -174,8 +174,8 @@ impl Pwm {
             .and_then(|path| read(&path))
             .and_then(parse_duration)?;
 
-        if duty_cycle >= period {
-            return Err(PwmError::DutyCycleNotLessThanPeriod);
+        if duty_cycle > period {
+            return Err(PwmError::DutyCycleGreaterThanPeriod);
         }
 
         self.channel_file(&controller, &channel, "duty_cycle")

@@ -195,38 +195,39 @@ fn test_duty_cycle_cannot_be_larger_than_period() -> anyhow::Result<()> {
     let period_file = write(channel_dir.join("period"), "100");
     let duty_cycle_file = write(channel_dir.join("duty_cycle"), "70");
 
-    // setting duty_cycle to the value of period should fail:
+    // setting duty_cycle to a value greater than the period should fail:
     let error = match connection.call_method(
         destination,
         path,
         iface,
         "SetDutyCycleNs",
-        &(0u32, 0u32, 100u64),
+        &(0u32, 0u32, 101u64),
     ) {
         Err(zbus::Error::MethodError(_, Some(error), _)) => error.to_lowercase(),
         x => panic!("expected MethodError, got: {:?}", x),
     };
     assert!(
-        error.contains("less than"),
+        error.contains("greater than"),
         "expected an error about duty cycle not being less than period, but got this: {}",
         error
     );
     // still the old value for duty cycle:
     check_file(&duty_cycle_file, "70");
 
-    // now we try setting the period to the same value as duty cycle, which should also fail:
+    // now we try setting the period to a value less than the current duty
+    // cycle, which should also fail:
     let error = match connection.call_method(
         destination,
         path,
         iface,
         "SetPeriodNs",
-        &(0u32, 0u32, 70u64),
+        &(0u32, 0u32, 69u64),
     ) {
         Err(zbus::Error::MethodError(_, Some(error), _)) => error.to_lowercase(),
         x => panic!("expected MethodError, got: {:?}", x),
     };
     assert!(
-        error.contains("less than"),
+        error.contains("greater than"),
         "expected an error about duty cycle not being less than period, but got this: {}",
         error
     );
