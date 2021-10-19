@@ -232,7 +232,7 @@ impl Pwm {
         }
 
         let path = self
-            .controller_dir(&controller)
+            .controller_dir(controller)
             .map(|controller| controller.join(format!("pwm{}", channel.0)))?;
         if path.is_dir() {
             Ok(path)
@@ -248,7 +248,7 @@ impl Pwm {
         fname: &str,
     ) -> Result<PathBuf> {
         let path = self
-            .channel_dir(&controller, &channel)
+            .channel_dir(controller, channel)
             .map(|channel| channel.join(fname))?;
         if path.is_file() {
             Ok(path)
